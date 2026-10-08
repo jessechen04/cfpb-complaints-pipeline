@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -16,8 +17,7 @@ headers = {
     "Accept": "application/json",
 }
 
-OLD_FILE = "complaints_raw.jsonl"
-OUTPUT_FILE = "complaints_raw.jsonl.tmp"
+OUTPUT_FILE = "complaints_raw.jsonl"
 
 today = datetime.now(timezone.utc)
 six_months_ago = today - relativedelta(months=6)
@@ -56,38 +56,44 @@ def get_page(params, retries=6):
             time.sleep(wait)
 
 
-# ---- Read Old File ----
+# ---- Resume from an existing file ----
 seen_ids = set()
-first_date = None
+by_company = Counter()
+last_date = None
 
-if os.path.exists(OLD_FILE):
-    with open(OLD_FILE, "r", encoding="utf-8") as f:
+if os.path.exists(OUTPUT_FILE):
+    with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
         for line in f:
             try:
                 rec = json.loads(line)
             except ValueError:
-                continue
-            if first_date is None:
-                first_date = rec["date_received"]   # line 1 = newest
+                continue  # skip a partial last line
             seen_ids.add(rec["complaint_id"])
+            by_company[rec.get("company")] += 1
+            last_date = rec.get("date_received")
 
-    if first_date:
-        start = datetime.strptime(first_date[:10], "%Y-%m-%d") - timedelta(days=1)
-        params["date_received_min"] = start.strftime("%Y-%m-%d")
-        print(f"Collecting new records back to {start.date()}")
-else:
-    raise RuntimeError("No previous snapshot found. Run the initial pull locally first.")
+    if last_date:
+        # max is inclusive, so restart from the last saved record's day
+        params["date_received_max"] = last_date[:10]
+        print(f"Resuming: {len(seen_ids)} records already saved, "
+              f"restarting from {last_date[:10]}")
 
-new_written = 0
+total_written = len(seen_ids)
 duplicates_skipped = 0
-cutoff = six_months_ago.strftime("%Y-%m-%d")
+first_page = True
 
-with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
     while True:
         data = get_page(params)
         hits = data.get("hits", {}).get("hits", [])
         if not hits:
             break
+
+        if first_page:
+            print("total_record_count:", data.get("_meta", {}).get("total_record_count"))
+            print("hits.total:", data.get("hits", {}).get("total"))
+            print("Newest record on first page:", hits[0]["_source"].get("date_received"))
+            first_page = False
 
         for hit in hits:
             src = hit["_source"]
@@ -96,36 +102,19 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                 duplicates_skipped += 1
                 continue
             seen_ids.add(cid)
+            by_company[src.get("company")] += 1
             f.write(json.dumps(src) + "\n")
-            new_written += 1
+            total_written += 1
+
+        f.flush()  # make sure each page is on disk
 
         last_sort = hits[-1]["sort"]
         params["search_after"] = f"{last_sort[0]}_{last_sort[1]}"
 
-        print(f"New records: {new_written} (skipped {duplicates_skipped} dupes)")
+        print(f"Total records: {total_written} (skipped {duplicates_skipped} dupes)")
         time.sleep(0.5)
 
-    kept = 0
-    bad_lines = 0
-    with open(OLD_FILE, "r", encoding="utf-8") as old:
-        for line_no, line in enumerate(old, 1):
-            try:
-                date = json.loads(line)["date_received"][:10]
-            except (ValueError, KeyError):
-                bad_lines += 1
-                print(f"Bad line {line_no} in old file: {line[:80]!r}")
-                continue
-            if date < cutoff:
-                break
-            f.write(line)
-            kept += 1
-
-if bad_lines:
-    raise RuntimeError(
-        f"{bad_lines} unreadable line(s) in the old snapshot. "
-        "Not replacing it. Inspect the file first."
-    )
-
-os.replace(OUTPUT_FILE, OLD_FILE)
-print(f"\nDone. {new_written} new + {kept} kept = {new_written + kept} records in {OLD_FILE}")
+print(f"\nDone. {total_written} records in {OUTPUT_FILE}")
 print(f"Duplicates skipped: {duplicates_skipped}")
+for company, n in by_company.most_common():
+    print(f"  {company}: {n}")
