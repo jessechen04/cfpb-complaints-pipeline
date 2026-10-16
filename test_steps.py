@@ -1,5 +1,6 @@
 import main
 from google.cloud import bigquery
+import os
 
 bq = bigquery.Client(project=main.PROJECT)
 
@@ -10,7 +11,7 @@ bq = bigquery.Client(project=main.PROJECT)
 # main.load_bq(bq, "raw/2026-10-08T001100/complaints_raw.jsonl.gz")
 # # 2. Load + rebuild: use that blob (or any existing one in your bucket)
 # main.load_bq(bq, blob)
-main.rebuild_tables(bq)
+# main.rebuild_tables(bq)
 
 # # 3. Sheets (set SHEET_ID first)
-# main.push_sheets(bq)
+main.refresh_sheet()

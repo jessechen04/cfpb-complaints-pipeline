@@ -1,0 +1,11 @@
+*.jsonl
+*.json
+*.gz
+test_steps.py
+reset_tables.py
+__pycache__/
+tests/
+sql/exploration/
+.git/
+.env
+env.yaml

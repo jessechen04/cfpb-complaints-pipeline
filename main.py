@@ -22,15 +22,7 @@ from google.cloud import bigquery, storage
 PROJECT = os.environ.get("GCP_PROJECT_ID", "cfpb-complaints-pipeline")
 DATASET = os.environ.get("BQ_DATASET", "cfpb")
 BUCKET = os.environ.get("BUCKET", "chenj-cfpb-complaints-raw")
-SHEET_IDS = json.loads(os.environ.get("SHEET_IDS", "{}"))
-
-# Which tab (worksheet) each table goes to.
-TAB_NAMES = {
-    "bureau_scorecard": "bureau_scorecard",
-    "issue_by_company": "issue_by_company",
-    "state_by_company": "state_by_company",
-    "weekly_by_company": "weekly_by_company",
-}
+SHEET_ID = os.environ.get("SHEET_ID", "1h_cfHDtJtsBV05-Uh08fxYbf9LCbF921FoGNN3XTS5Q")
 
 RAW_TABLE = f"{PROJECT}.{DATASET}.complaints_raw"
 DERIVED_TABLES = [
@@ -195,31 +187,22 @@ def rebuild_tables(bq):
 
 
 # ---------------------------------------------------------------- step 5: Sheets
-def push_sheets(bq):
-    if not SHEET_IDS:
-        print("SHEET_IDS not set; skipping Sheets push")
+def refresh_sheet():
+    """Tell Google Sheets to re-pull every BigQuery-connected data source in the spreadsheet."""
+    if not SHEET_ID:
+        print("SHEET_ID not set; skipping Sheets refresh")
         return
-
+ 
     creds, _ = google.auth.default(scopes=[
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/bigquery.readonly",  # needed for Connected Sheets data
     ])
     gc = gspread.authorize(creds)
-
-    for table in DERIVED_TABLES:
-        sheet_id = SHEET_IDS.get(table)
-        if not sheet_id:
-            print(f"No sheet id for {table}; skipping")
-            continue
-
-        df = bq.query(f"SELECT * FROM `{PROJECT}.{DATASET}.{table}`").to_dataframe()
-        df = df.astype(object).where(df.notna(), "")  # NaN/NaT -> empty cell
-        rows = [df.columns.tolist()] + df.astype(str).values.tolist()
-
-        ws = gc.open_by_key(sheet_id).sheet1
-        ws.clear()
-        ws.update(values=rows, range_name="A1", value_input_option="USER_ENTERED")
-        print(f"Pushed {len(df)} rows to sheet for {table}")
+    # The refresh runs in the background; this call returns before the data finishes loading.
+    gc.open_by_key(SHEET_ID).batch_update(
+        {"requests": [{"refreshDataSource": {"isAll": True}}]}
+    )
+    print("Requested refresh of all data sources in the spreadsheet")
 
 
 # ---------------------------------------------------------------- entrypoint
@@ -233,7 +216,7 @@ def run(request):
         blob_name = upload_snapshot()
         load_bq(bq, blob_name)
         rebuild_tables(bq)
-        push_sheets(bq)
+        refresh_sheet(bq)
     finally:
         # Warm instances reuse /tmp, so always clean up.
         if os.path.exists(LOCAL_FILE):
