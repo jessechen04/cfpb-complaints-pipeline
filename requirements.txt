@@ -1,0 +1,8 @@
+functions-framework
+requests
+python-dateutil
+google-cloud-storage
+google-cloud-bigquery
+pandas
+db-dtypes
+gspread
