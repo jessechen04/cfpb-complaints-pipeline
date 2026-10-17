@@ -1,6 +1,6 @@
-"""CFPB complaints pipeline: pull -> GCS -> BigQuery -> rebuild tables -> Google Sheets.
+"""CFPB complaints pipeline: pull -> GCS -> BigQuery -> rebuild tables -> refresh Google Sheet.
 
-Triggered weekly by Cloud Scheduler. Every run re-pulls the full 6-month window,
+Runs as a Cloud Run job, started weekly by Cloud Scheduler. Every run re-pulls the full 6-month window,
 so stale "In progress" statuses are always replaced with current ones.
 """
 import gzip
@@ -10,7 +10,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import functions_framework
 import google.auth
 import gspread
 import requests
@@ -22,7 +21,9 @@ from google.cloud import bigquery, storage
 PROJECT = os.environ.get("GCP_PROJECT_ID", "cfpb-complaints-pipeline")
 DATASET = os.environ.get("BQ_DATASET", "cfpb")
 BUCKET = os.environ.get("BUCKET", "chenj-cfpb-complaints-raw")
-SHEET_ID = os.environ.get("SHEET_ID", "1h_cfHDtJtsBV05-Uh08fxYbf9LCbF921FoGNN3XTS5Q")
+
+# ID of the ONE Google Sheet that holds all 4 tables (the long string in its URL).
+SHEET_ID = os.environ.get("SHEET_ID", "")
 
 RAW_TABLE = f"{PROJECT}.{DATASET}.complaints_raw"
 DERIVED_TABLES = [
@@ -139,6 +140,10 @@ def check_row_count(bq, new_count):
     if new_count == 0:
         raise RuntimeError("Pull returned 0 rows; aborting")
 
+    # Compare only the date range the new pull covers. The table's window started
+    # about a week earlier, and volume swings week to week, so a whole-table
+    # comparison would flag normal changes. Within the same date range, the new
+    # pull should have about as many rows as the table (complaints get added, not removed).
     cutoff = (datetime.now(timezone.utc) - relativedelta(months=6)).strftime("%Y-%m-%d")
     try:
         prev = next(iter(bq.query(
@@ -192,7 +197,7 @@ def refresh_sheet():
     if not SHEET_ID:
         print("SHEET_ID not set; skipping Sheets refresh")
         return
- 
+
     creds, _ = google.auth.default(scopes=[
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/bigquery.readonly",  # needed for Connected Sheets data
@@ -206,8 +211,7 @@ def refresh_sheet():
 
 
 # ---------------------------------------------------------------- entrypoint
-@functions_framework.http
-def run(request):
+def run():
     start = time.time()
     bq = bigquery.Client(project=PROJECT)
     try:
@@ -216,12 +220,17 @@ def run(request):
         blob_name = upload_snapshot()
         load_bq(bq, blob_name)
         rebuild_tables(bq)
-        refresh_sheet(bq)
+        refresh_sheet()
     finally:
-        # Warm instances reuse /tmp, so always clean up.
+        # Clean up the scratch file even if a step failed.
         if os.path.exists(LOCAL_FILE):
             os.remove(LOCAL_FILE)
 
-    msg = f"OK: {n} rows in {time.time() - start:.0f}s"
-    print(msg)
-    return msg, 200
+    print(f"OK: {n} rows in {time.time() - start:.0f}s")
+
+
+# Cloud Run jobs start the container with `python main.py`. An error raised in run()
+# ends the process with a failure code, which Cloud Run records as a failed execution.
+# Importing main from a test file does NOT trigger this.
+if __name__ == "__main__":
+    run()

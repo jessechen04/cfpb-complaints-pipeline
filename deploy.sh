@@ -22,8 +22,8 @@ SA="cfpb-pipeline@${PROJECT}.iam.gserviceaccount.com"
 #   gcloud services enable sheets.googleapis.com --project "$PROJECT"
 #
 # TODO: let the service account read/write the bucket
-#   gcloud storage buckets add-iam-policy-binding gs://chenj-cfpb-complaints-raw \
-#     --member "serviceAccount:$SA" --role roles/storage.objectAdmin
+  # gcloud storage buckets add-iam-policy-binding gs://chenj-cfpb-complaints-raw \
+  #   --member "serviceAccount:$SA" --role roles/storage.objectAdmin
 # TODO: enable the APIs the deploy needs
 #   gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
 #     artifactregistry.googleapis.com cloudscheduler.googleapis.com --project "$PROJECT"
@@ -48,21 +48,21 @@ gcloud run jobs add-iam-policy-binding "$JOB" --region "$REGION" --project "$PRO
 # The URI is the Cloud Run API call that starts the job. It's a Google API, so it
 # uses an OAuth token (not the OIDC token the function version used).
 # ------------------------------------------------------------------
-URI="https://run.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/jobs/${JOB}:run"
+# URI="https://run.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/jobs/${JOB}:run"
 
-SCHEDULE_ARGS=(
-  --location "$REGION" --project "$PROJECT"
-  --schedule "0 6 * * 1" --time-zone "America/New_York"
-  --uri "$URI" --http-method POST
-  --oauth-service-account-email "$SA"
-  --max-retry-attempts 0
-)
+# SCHEDULE_ARGS=(
+#   --location "$REGION" --project "$PROJECT"
+#   --schedule "0 6 * * 1" --time-zone "America/New_York"
+#   --uri "$URI" --http-method POST
+#   --oauth-service-account-email "$SA"
+#   --max-retry-attempts 0
+# )
 
-if gcloud scheduler jobs describe "${JOB}-weekly" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
-  gcloud scheduler jobs update http "${JOB}-weekly" "${SCHEDULE_ARGS[@]}"
-else
-  gcloud scheduler jobs create http "${JOB}-weekly" "${SCHEDULE_ARGS[@]}"
-fi
+# if gcloud scheduler jobs describe "${JOB}-weekly" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1; then
+#   gcloud scheduler jobs update http "${JOB}-weekly" "${SCHEDULE_ARGS[@]}"
+# else
+#   gcloud scheduler jobs create http "${JOB}-weekly" "${SCHEDULE_ARGS[@]}"
+# fi
 
 # Test run (waits until the job finishes, then shows the result):
 #   gcloud run jobs execute "$JOB" --region "$REGION" --project "$PROJECT" --wait
